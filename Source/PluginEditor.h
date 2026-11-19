@@ -107,7 +107,7 @@ private:
     RelaxxerProcessor& proc;
     std::vector<Node> nodes;
     std::array<float, relaxxer::Processor::displayPoints> level {}, red {};
-    float maxRed = 0.0f;
+    float maxRed = 0.0f, inDb = -120.0f, outDb = -120.0f, brightDb = 0.0f, makeupDb = 0.0f;
     int drag = -1, hover = -1;
 };
 
@@ -127,16 +127,16 @@ private:
     RelaxxerProcessor& proc;
 
     SpectrumView spectrum;
-    SoyKnob depth, sharpness, selectivity, attack, release, link, balance, mix, trim;
+    SoyKnob depth, sharpness, selectivity, attack, release, link, balance, mix, trim, recover, brighten, contour;
     SoySegment mode, stereo, quality;
-    juce::TextButton delta { "Delta" }, sidechain { "Sidechain" };
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> deltaAtt, scAtt;
+    juce::TextButton delta { "Delta" }, sidechain { "Sidechain" }, autoGain;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> deltaAtt, scAtt, agAtt;
 
     juce::ComboBox presetBox;
     juce::TextButton prevButton { "<" }, nextButton { ">" };
 
     juce::Image grain;
-    juce::Rectangle<int> appbar, panelCore, panelTime, panelStereo, panelOut;
+    juce::Rectangle<int> appbar, panelCore, panelTone, panelTime, panelStereo, panelOut;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (RelaxxerEditor)
 };

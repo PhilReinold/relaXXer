@@ -2,7 +2,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "RelaxxerDSP.h"
 
-class RelaxxerProcessor : public juce::AudioProcessor
+class RelaxxerProcessor : public juce::AudioProcessor, private juce::AsyncUpdater
 {
 public:
     RelaxxerProcessor();
@@ -34,13 +34,18 @@ public:
     relaxxer::Params readParams() const;
 
     juce::AudioProcessorValueTreeState apvts;
-    relaxxer::Processor dsp; // GUI liest nur die lock-freien Anzeige-Werte
+    // zwei Engines: Normal/Hoch (~21 ms) und Live (~5 ms); GUI liest die aktive (lock-freie Anzeige-Werte)
+    const relaxxer::Processor& display() const { return liveActive.load() ? dspLive : dsp; }
     std::atomic<bool> sidechainConnected { false };
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
     std::atomic<float>* raw (const char* id) const { return apvts.getRawParameterValue (id); }
+    void handleAsyncUpdate() override; // Latenz an den Host melden (Message-Thread)
     int currentProgram = 0;
+    relaxxer::Processor dsp, dspLive;
+    std::atomic<bool> liveActive { false };
+    bool lastLive = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (RelaxxerProcessor)
 };

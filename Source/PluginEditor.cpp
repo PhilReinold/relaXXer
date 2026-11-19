@@ -136,7 +136,9 @@ void soy::LookAndFeel::drawButtonText (juce::Graphics& g, juce::TextButton& b, b
         g.fillEllipse (dot);
     }
     g.setColour (on ? C::ink : C::inkMuted);
-    g.setFont (Fonts::bodyBold (14.0f));
+    float fs = 14.0f; // Schrift verkleinern, falls der Platz knapp ist
+    while (fs > 11.0f && Fonts::bodyBold (fs).getStringWidthFloat (b.getButtonText()) > (float) r.getWidth() - 10.0f) fs -= 0.5f;
+    g.setFont (Fonts::bodyBold (fs));
     g.drawText (b.getButtonText(), r, juce::Justification::centred);
 }
 
@@ -279,13 +281,16 @@ int SpectrumView::nodeAt (juce::Point<float> pt) const
 
 void SpectrumView::refresh()
 {
+    const auto& d = proc.display();
     for (int i = 0; i < relaxxer::Processor::displayPoints; ++i)
     {
-        level[(size_t) i] = proc.dsp.getDisplayLevel (i);
-        const float r = proc.dsp.getDisplayReduction (i);
-        red[(size_t) i] = juce::jmax (r, red[(size_t) i] * 0.88f); // optisch sanft abklingen
+        level[(size_t) i] = d.getDisplayLevel (i);
+        const float r = d.getDisplayReduction (i);
+        // Absenkung optisch sanft abklingen lassen; Anhebungen (negativ) direkt zeigen
+        red[(size_t) i] = r >= 0.0f ? juce::jmax (r, red[(size_t) i] * 0.88f) : r;
     }
-    maxRed = juce::jmax (proc.dsp.getMaxReductionDb(), maxRed * 0.92f);
+    maxRed = juce::jmax (d.getMaxReductionDb(), maxRed * 0.92f);
+    inDb = d.getInputDb(); outDb = d.getOutputDb(); brightDb = d.getBrightnessDeltaDb(); makeupDb = d.getMakeupDb();
     repaint();
 }
 
@@ -360,6 +365,29 @@ void SpectrumView::paint (juce::Graphics& g)
         g.fillPath (r);
     }
 
+    // Anhebung durch "Freilegen" (von unten, violett)
+    {
+        bool any = false;
+        juce::Path b;
+        b.startNewSubPath (p.getX(), p.getBottom());
+        for (int i = 0; i < relaxxer::Processor::displayPoints; ++i)
+        {
+            const float f = relaxxer::Processor::displayFreq (i);
+            const float up = juce::jlimit (0.0f, 1.0f, -red[(size_t) i] / 8.0f);
+            any |= up > 0.01f;
+            b.lineTo (xOf (f), p.getBottom() - up * p.getHeight() * 0.35f);
+        }
+        b.lineTo (p.getRight(), p.getBottom());
+        b.closeSubPath();
+        if (any)
+        {
+            g.setColour (C::violet.withAlpha (0.35f));
+            g.fillPath (b);
+            g.setColour (C::violet.withAlpha (0.8f));
+            g.strokePath (b, juce::PathStrokeType (1.2f));
+        }
+    }
+
     // Fokus-Kurve (Empfindlichkeit)
     {
         juce::Path c;
@@ -406,15 +434,30 @@ void SpectrumView::paint (juce::Graphics& g)
     }
 
     // Legende
-    auto leg = juce::Rectangle<float> (p.getX() + 8, p.getY() + 6, 260, 22);
-    g.setColour (C::panel.withAlpha (0.9f));
-    g.fillRoundedRectangle (leg.withWidth (196.0f), 11.0f);
-    g.setColour (C::inkMuted);
-    g.setFont (soy::Fonts::body (13.0f));
-    g.drawText ("Max. Absenkung", leg.withTrimmedLeft (10), juce::Justification::centredLeft);
-    g.setColour (C::ink);
-    g.setFont (soy::Fonts::mono (13.0f));
-    g.drawText (juce::String (-maxRed, 1) + " dB", leg.withTrimmedLeft (116).withWidth (74), juce::Justification::centredLeft);
+    {
+        // Legende: max. Absenkung, Pegel rein/raus, Helligkeit (wie die Meter bei Gullfoss)
+        auto leg = juce::Rectangle<float> (p.getX() + 8, p.getY() + 6, 560, 22);
+        g.setColour (C::panel.withAlpha (0.92f));
+        g.fillRoundedRectangle (leg, 11.0f);
+        auto item = [&] (const juce::String& label, const juce::String& value, float w)
+        {
+            auto r = leg.removeFromLeft (w);
+            g.setColour (C::inkMuted);
+            g.setFont (soy::Fonts::body (13.0f));
+            const float lw = soy::Fonts::body (13.0f).getStringWidthFloat (label) + 6.0f;
+            g.drawText (label, r.removeFromLeft (lw + 10).withTrimmedLeft (10), juce::Justification::centredLeft);
+            g.setColour (C::ink);
+            g.setFont (soy::Fonts::mono (13.0f));
+            g.drawText (value, r, juce::Justification::centredLeft);
+        };
+        auto db = [] (float v) { return v <= -99.0f ? juce::String ("-inf") : juce::String (v, 1); };
+        auto sgn = [] (float v) { return (v >= 0.0f ? "+" : "") + juce::String (v, 1); };
+        item ("Absenkung", juce::String (-maxRed, 1) + " dB", 152);
+        item ("Rein", db (inDb), 92);
+        item ("Raus", db (outDb), 92);
+        item ("Helligkeit", sgn (brightDb) + " dB", 140);
+        if (std::abs (makeupDb) > 0.05f) item ("Ausgleich", sgn (makeupDb), 84);
+    }
 
     if (params.useSidechain && ! proc.sidechainConnected.load())
     {
@@ -513,24 +556,30 @@ RelaxxerEditor::RelaxxerEditor (RelaxxerProcessor& p)
       balance     (p.apvts, "balance",     "Balance", true),
       mix         (p.apvts, "mix",         "Mix"),
       trim        (p.apvts, "trim",        "Trim", true),
+      recover     (p.apvts, "recover",     "Freilegen"),
+      brighten    (p.apvts, "brighten",    "Hell/Dunkel", true),
+      contour     (p.apvts, "contour",     "Kontur", true),
       mode    (p.apvts, "mode",    { "Soft", "Hard" }),
       stereo  (p.apvts, "stereo",  { "L/R", "M/S" }),
-      quality (p.apvts, "quality", { "Normal", "Hoch" })
+      quality (p.apvts, "quality", { "Normal", "Hoch", "Live" })
 {
     setLookAndFeel (&laf);
 
     for (juce::Component* c : std::initializer_list<juce::Component*> { &spectrum, &depth, &sharpness, &selectivity, &attack, &release,
                                                                         &link, &balance, &mix, &trim, &mode, &stereo, &quality,
+                                                                        &recover, &brighten, &contour, &autoGain,
                                                                         &delta, &sidechain, &presetBox, &prevButton, &nextButton })
         addAndMakeVisible (c);
 
-    for (auto* b : { &delta, &sidechain })
+    autoGain.setButtonText (u8 ("Lautheit halten"));
+    for (auto* b : { &delta, &sidechain, &autoGain })
     {
         b->setClickingTogglesState (true);
         b->getProperties().set ("chip", true);
     }
     deltaAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (p.apvts, "delta", delta);
     scAtt    = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (p.apvts, "sidechain", sidechain);
+    agAtt    = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (p.apvts, "autogain", autoGain);
     delta.setTooltip (u8 ("Nur das hören, was RelaXXer entfernt"));
 
     for (int i = 0; i < proc.getNumPrograms(); ++i)
@@ -553,7 +602,7 @@ RelaxxerEditor::RelaxxerEditor (RelaxxerProcessor& p)
             }
     }
 
-    setSize (940, 600);
+    setSize (1210, 610);
     startTimerHz (30);
 }
 
@@ -594,8 +643,9 @@ void RelaxxerEditor::resized()
     spectrum.setBounds (r);
 
     const int gap = 16;
-    const int wCore = 300, wTime = 190, wStereo = 190;
+    const int wCore = 290, wTone = 260, wTime = 200, wStereo = 180;
     panelCore   = bottom.removeFromLeft (wCore);   bottom.removeFromLeft (gap);
+    panelTone   = bottom.removeFromLeft (wTone);   bottom.removeFromLeft (gap);
     panelTime   = bottom.removeFromLeft (wTime);   bottom.removeFromLeft (gap);
     panelStereo = bottom.removeFromLeft (wStereo); bottom.removeFromLeft (gap);
     panelOut    = bottom;
@@ -610,6 +660,15 @@ void RelaxxerEditor::resized()
         auto rest = i;
         sharpness.setBounds (rest.removeFromLeft (rest.getWidth() / 2));
         selectivity.setBounds (rest);
+    }
+    { // Klang (inspiriert von Gullfoss)
+        auto i = inner (panelTone);
+        autoGain.setBounds (i.removeFromBottom (32));
+        i.removeFromBottom (8);
+        const int w3 = i.getWidth() / 3;
+        recover.setBounds (i.removeFromLeft (w3));
+        brighten.setBounds (i.removeFromLeft (w3));
+        contour.setBounds (i);
     }
     { // Tempo
         auto i = inner (panelTime);
@@ -683,6 +742,7 @@ void RelaxxerEditor::paint (juce::Graphics& g)
         g.drawText (title, r.reduced (16, 10).removeFromTop (22), juce::Justification::centredLeft);
     };
     panel (panelCore, "Kern");
+    panel (panelTone, "Klang");
     panel (panelTime, "Tempo");
     panel (panelStereo, "Stereo");
     panel (panelOut, "Ausgang");

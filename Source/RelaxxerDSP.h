@@ -39,6 +39,11 @@ struct Params
     bool  delta       = false;  // nur das Entfernte hören
     bool  useSidechain = false;
     bool  highQuality = false;  // 87,5 % statt 75 % Überlappung
+    // inspiriert von Gullfoss:
+    float recover     = 0.0f;   // 0..1  verdeckte (zu leise) Bereiche behutsam anheben ("Freilegen")
+    float brighten    = 0.0f;   // -1..+1 Erkennung bevorzugt Tiefen (heller) oder Höhen (dunkler)
+    float contourDb   = 0.0f;   // -10..+10 Lautheitskontur: + = mehr Bass/Höhen, weniger Mitten
+    bool  autoGain    = false;  // wahrgenommene Lautheit halten (fairer A/B-Vergleich)
     float lowCutHz    = 40.0f;  // Arbeitsbereich unten
     float highCutHz   = 20000.0f;
     // zwei Fokus-Bänder: Empfindlichkeit (Sensitivity) in dB, wie die Knoten bei soothe
@@ -52,11 +57,13 @@ public:
     static constexpr int   displayPoints = 160;   // log-verteilte Punkte 20 Hz .. 20 kHz fürs GUI
     static constexpr float safetyClamp   = 4.0f;
 
-    void prepare (double sampleRate, int numChannels)
+    // lowLatency: ~5 ms Fenster (Live-Modus, gröberes Frequenzraster) statt ~21 ms
+    void prepare (double sampleRate, int numChannels, bool lowLatency = false)
     {
         sr = std::clamp (sampleRate, 8000.0, 768000.0);
         channels = std::clamp (numChannels, 1, 2);
         fftSize = sr <= 50000.0 ? 1024 : (sr <= 100000.0 ? 2048 : 4096); // ~21 ms Fenster, ~47 Hz Raster
+        if (lowLatency) fftSize /= 4;
         bins = fftSize / 2 + 1;
         buildFft();
        #if RELAXXER_USE_JUCE_FFT
@@ -91,6 +98,11 @@ public:
         scratchBuf.assign ((size_t) fftSize, {});
         pow0.assign ((size_t) bins, 0.0f); pow1.assign ((size_t) bins, 0.0f);
         cFocus.clear(); cAtt.clear(); tcRate = -1; cacheKey.fill (-1.0f);
+        cContour.assign ((size_t) bins, 1.0f); cLoud.assign ((size_t) bins, 1.0f); contourKey = 1.0e9f;
+        boostWork.assign ((size_t) bins, 0.0f);
+        makeupDb = 0.0f;
+        meterIn.store (-120.0f); meterOut.store (-120.0f); meterBright.store (0.0f); meterMakeup.store (0.0f);
+        inMs = outMs = 0.0f; brightIn = brightOut = 0.0f;
 
         binHz.resize ((size_t) bins);
         for (int k = 0; k < bins; ++k) binHz[(size_t) k] = (float) ((double) k * sr / fftSize);
@@ -109,7 +121,29 @@ public:
             r.lo.reserve ((size_t) bins); r.hi.reserve ((size_t) bins); r.inv.reserve ((size_t) bins);
         }
         rangeNext = 0;
-        rangesFor (0.5f, 3); rangesFor (0.33f, 3);
+        rangesFor (0.5f, 3); rangesFor (0.33f, 3); rangesFor (0.75f, 3); rangesFor (0.083f, 1);
+        for (int k = 0; k < bins; ++k) // Lautheits-Gewichtung (grob gehörrichtig, für Auto-Gain und Meter)
+        {
+            const float f = std::max (binHz[(size_t) k], 1.0f);
+            const float hp = 1.0f / (1.0f + std::pow (120.0f / f, 2.0f));
+            const float shelf = 1.0f + 0.6f / (1.0f + std::pow (2000.0f / f, 2.0f));
+            cLoud[(size_t) k] = hp * shelf;
+        }
+    }
+
+    // Puffer leeren ohne Speicher neu anzulegen (beim Umschalten Normal/Live)
+    void reset()
+    {
+        for (int c = 0; c < 2; ++c)
+        {
+            std::fill (inBuf[c].begin(), inBuf[c].end(), 0.0f);
+            std::fill (scBuf[c].begin(), scBuf[c].end(), 0.0f);
+            std::fill (outAcc[c].begin(), outAcc[c].end(), 0.0f);
+            std::fill (outBuf[c].begin(), outBuf[c].end(), 0.0f);
+            std::fill (redSmooth[c].begin(), redSmooth[c].end(), 0.0f);
+        }
+        pos = 0;
+        makeupDb = 0.0f;
     }
 
     // Latenz in Samples (abhängig von der Qualität)
@@ -175,6 +209,10 @@ public:
     float getDisplayReduction (int i) const { return dispRed[(size_t) i].load (std::memory_order_relaxed); }
     float getMaxReductionDb() const { return maxRedDb.load (std::memory_order_relaxed); }
     bool  isClipping() const { return clipHold > 0; }
+    float getInputDb() const      { return meterIn.load (std::memory_order_relaxed); }   // gewichteter RMS, ~300 ms
+    float getOutputDb() const     { return meterOut.load (std::memory_order_relaxed); }
+    float getBrightnessDeltaDb() const { return meterBright.load (std::memory_order_relaxed); } // Ausgang heller (+) / dunkler (-)
+    float getMakeupDb() const     { return meterMakeup.load (std::memory_order_relaxed); }
 
     // Fokus-Gewichtung in dB bei Frequenz f (auch fürs GUI, damit Kurve und DSP identisch sind)
     static float focusWeightDb (float f, const Params& p)
@@ -186,6 +224,19 @@ public:
             return db * std::exp (-0.5f * d * d * 4.0f);
         };
         return bell (p.band1Hz, p.band1Db, p.band1Q) + bell (p.band2Hz, p.band2Db, p.band2Q);
+    }
+    // Hell/Dunkel: + = Tiefen werden empfindlicher behandelt (Ergebnis heller), - = Höhen (dunkler)
+    static float brightenWeightDb (float f, const Params& p)
+    {
+        return -p.brighten * 2.5f * std::clamp (std::log2 (std::max (f, 1.0f) / 1000.0f), -5.0f, 4.5f);
+    }
+    // Lautheitskontur (statisch, wie "Boost" bei Gullfoss): Badewannen-Kurve, Mitten-Mittelwert ~0
+    static float contourShapeDb (float f, float amountDb)
+    {
+        const float lf = std::log2 (std::max (f, 1.0f));
+        const float bass = 0.5f + 0.5f * std::tanh ((std::log2 (150.0f) - lf) * 1.3f);
+        const float treb = 0.5f + 0.5f * std::tanh ((lf - std::log2 (9000.0f)) * 1.3f);
+        return amountDb * (bass + 0.6f * treb - 0.25f);
     }
     // Arbeitsbereich 0..1 (weiche Flanken, ca. 1/2 Oktave)
     static float rangeWeight (float f, const Params& p)
@@ -211,6 +262,9 @@ private:
         p.balance     = std::clamp (fin (p.balance, 0.0f), -1.0f, 1.0f);
         p.mix         = std::clamp (fin (p.mix, 1.0f), 0.0f, 1.0f);
         p.trimDb      = std::clamp (fin (p.trimDb, 0.0f), -24.0f, 24.0f);
+        p.recover     = std::clamp (fin (p.recover, 0.0f), 0.0f, 1.0f);
+        p.brighten    = std::clamp (fin (p.brighten, 0.0f), -1.0f, 1.0f);
+        p.contourDb   = std::clamp (fin (p.contourDb, 0.0f), -10.0f, 10.0f);
         p.lowCutHz    = std::clamp (fin (p.lowCutHz, 40.0f), 10.0f, 22000.0f);
         p.highCutHz   = std::clamp (fin (p.highCutHz, 20000.0f), p.lowCutHz, 40000.0f);
         auto band = [] (float& hz, float& db, float& q)
@@ -339,6 +393,24 @@ private:
         const float widthOct = 0.02f + 0.30f * std::pow (1.0f - p.sharpness / 10.0f, 1.5f);
         smoothLog (R, work, widthOct, 0);
         for (int k = 0; k < bins; ++k) R[(size_t) k] = std::max (work[(size_t) k], 0.6f * R[(size_t) k] * (p.sharpness / 10.0f));
+
+        // Freilegen (Recover): breite Täler unter der Klang-Balance behutsam anheben (max. +6 dB)
+        if (p.recover > 0.0f)
+        {
+            smoothLog (L, work, 0.75f, 3);       // breite Balance (~1,5 Oktaven)
+            smoothLog (L, work2, 0.083f, 1);     // feine Struktur (~1/6 Oktave), keine Lücken zwischen Obertönen
+            for (int k = 0; k < bins; ++k)
+            {
+                const float rw = cRange[(size_t) k];
+                const float under = work[(size_t) k] - work2[(size_t) k] - 1.5f - cFocus[(size_t) k] * 0.5f;
+                float b = 0.0f;
+                if (rw > 0.0f && under > 0.0f && work2[(size_t) k] > -85.0f)
+                    b = std::min (6.0f, p.recover * 1.0f * under) * rw;
+                boostWork[(size_t) k] = b;
+            }
+            smoothLog (boostWork, work, 0.17f, 1);
+            for (int k = 0; k < bins; ++k) R[(size_t) k] -= work[(size_t) k] * (R[(size_t) k] > 0.5f ? 0.0f : 1.0f);
+        }
     }
 
     void processFrame (const Params& p, bool useSc)
@@ -385,13 +457,17 @@ private:
 
         // 3) Zeitverhalten je Bin (Höhen schneller, Bässe langsamer)
         updateTimeCaches (p, frameRate);
+        updateContour (p);
         const float trimLin = std::pow (10.0f, p.trimDb / 20.0f);
         float maxRed = 0.0f;
+        double eIn = 0.0, eWet = 0.0, hfIn = 0.0, hfWet = 0.0;
+        const int hfStart = std::clamp ((int) (2000.0 * fftSize / sr), 1, bins - 1);
         for (int c = 0; c < nCh; ++c)
         {
             float bal = 1.0f;
             if (nCh == 2) bal = c == 0 ? std::min (1.0f, 1.0f - p.balance) : std::min (1.0f, 1.0f + p.balance);
             auto& rs = redSmooth[c];
+            const auto& pw = c ? pow1 : pow0;
             for (int k = 0; k < bins; ++k)
             {
                 float target = 0.0f;
@@ -404,16 +480,38 @@ private:
                 if (! std::isfinite (v)) v = 0.0f;
                 rs[(size_t) k] = v;
                 maxRed = std::max (maxRed, v);
-            }
 
-            // 4) Gain anwenden: Mix/Trim/Delta im Spektrum (kein extra Delay nötig)
+                // Energie vorher/nachher (gewichtet) für Lautheit halten + Meter
+                const float wet = std::exp (-0.11512925f * v) * cContour[(size_t) k];
+                const float e = (useSc ? std::norm (spec[c][(size_t) k]) * (4.0f / ((float) fftSize * (float) fftSize)) : pw[(size_t) k]) * cLoud[(size_t) k];
+                eIn  += e;
+                eWet += e * wet * wet;
+                if (k >= hfStart) { hfIn += e; hfWet += e * wet * wet; }
+            }
+        }
+
+        // Lautheit halten: Nassanteil so nachregeln, dass die gewichtete Energie gleich bleibt (träge, ±12 dB)
+        {
+            float target = 0.0f;
+            if (p.autoGain && eIn > 1.0e-10 && eWet > 1.0e-14)
+                target = std::clamp (10.0f * (float) std::log10 (eIn / eWet), -6.0f, 12.0f);
+            const float a = std::exp (-1.0f / (0.4f * frameRate));
+            makeupDb = a * makeupDb + (1.0f - a) * target;
+            if (! std::isfinite (makeupDb)) makeupDb = 0.0f;
+        }
+        const float makeup = std::pow (10.0f, makeupDb / 20.0f);
+
+        // 4) Gain anwenden: Mix/Trim/Delta im Spektrum (kein extra Delay nötig)
+        for (int c = 0; c < nCh; ++c)
+        {
+            const auto& rs = redSmooth[c];
             auto& s = spec[c];
             for (int k = 0; k < bins; ++k)
             {
                 const float g = std::exp (-0.11512925f * rs[(size_t) k]); // 10^(-dB/20)
                 float m;
-                if (p.delta) m = p.mix * (1.0f - g);                          // nur das Entfernte
-                else         m = p.mix * g * trimLin + (1.0f - p.mix);
+                if (p.delta) m = p.mix * (1.0f - g);                          // nur das Entfernte (ohne Kontur/Ausgleich)
+                else         m = p.mix * g * cContour[(size_t) k] * makeup * trimLin + (1.0f - p.mix);
                 s[(size_t) k] *= m;
                 if (k > 0 && k < fftSize / 2) s[(size_t) (fftSize - k)] = std::conj (s[(size_t) k]);
             }
@@ -422,6 +520,23 @@ private:
             fft (s, true);
             const float inv = scale * ifftNorm;
             for (int i = 0; i < fftSize; ++i) outAcc[c][(size_t) i] += s[(size_t) i].real() * window[(size_t) i] * inv;
+        }
+
+        // Meter (gewichteter RMS ~300 ms, Helligkeit = Anteil > 2 kHz)
+        {
+            const float a = std::exp (-1.0f / (0.3f * frameRate));
+            const float n = 1.0f / (float) std::max (1, nCh);
+            const float gOut = p.delta ? 1.0f : makeup * makeup * trimLin * trimLin;
+            inMs  = a * inMs  + (1.0f - a) * (float) eIn * n;
+            outMs = a * outMs + (1.0f - a) * (float) (p.delta ? 0.0 : eWet * gOut) * n;
+            const float bIn  = hfIn  > 1.0e-14 ? (float) (10.0 * std::log10 (hfIn / std::max (eIn, 1.0e-14))) : 0.0f;
+            const float bOut = hfWet > 1.0e-14 ? (float) (10.0 * std::log10 (hfWet / std::max (eWet, 1.0e-14))) : 0.0f;
+            brightIn = a * brightIn + (1.0f - a) * bIn;
+            brightOut = a * brightOut + (1.0f - a) * bOut;
+            meterIn.store (10.0f * std::log10 (inMs + 1.0e-14f), std::memory_order_relaxed);
+            meterOut.store (10.0f * std::log10 (outMs + 1.0e-14f), std::memory_order_relaxed);
+            meterBright.store (std::isfinite (brightOut - brightIn) ? brightOut - brightIn : 0.0f, std::memory_order_relaxed);
+            meterMakeup.store (makeupDb, std::memory_order_relaxed);
         }
         for (int c = 0; c < 2; ++c)
         {
@@ -451,14 +566,14 @@ private:
     // Gewichtungen nur neu berechnen, wenn sich Parameter ändern (spart CPU)
     void updateCaches (const Params& p)
     {
-        const float key[] = { p.lowCutHz, p.highCutHz, p.band1Hz, p.band1Db, p.band1Q, p.band2Hz, p.band2Db, p.band2Q };
+        const float key[] = { p.lowCutHz, p.highCutHz, p.band1Hz, p.band1Db, p.band1Q, p.band2Hz, p.band2Db, p.band2Q, p.brighten };
         if (std::equal (std::begin (key), std::end (key), cacheKey.begin()) && (int) cFocus.size() == bins) return;
         std::copy (std::begin (key), std::end (key), cacheKey.begin());
         cFocus.resize ((size_t) bins); cRange.resize ((size_t) bins);
         for (int k = 0; k < bins; ++k)
         {
             const float f = std::max (binHz[(size_t) k], 1.0f);
-            cFocus[(size_t) k] = focusWeightDb (f, p);
+            cFocus[(size_t) k] = focusWeightDb (f, p) + brightenWeightDb (f, p);
             cRange[(size_t) k] = rangeWeight (f, p);
         }
     }
@@ -473,6 +588,14 @@ private:
             cAtt[(size_t) k] = std::exp (-1.0f / std::max (0.001f * p.attackMs  * fScale * frameRate, 1.0e-3f));
             cRel[(size_t) k] = std::exp (-1.0f / std::max (0.001f * p.releaseMs * fScale * frameRate, 1.0e-3f));
         }
+    }
+
+    void updateContour (const Params& p)
+    {
+        if (p.contourDb == contourKey) return;
+        contourKey = p.contourDb;
+        for (int k = 0; k < bins; ++k)
+            cContour[(size_t) k] = std::pow (10.0f, contourShapeDb (std::max (binHz[(size_t) k], 1.0f), p.contourDb) / 20.0f);
     }
 
     cpx& scratch (int i) { return scratchBuf[(size_t) i]; }
@@ -491,8 +614,11 @@ private:
     std::array<Ranges, 6> rangeCache;
     unsigned rangeNext = 0;
     std::vector<float> pow0, pow1, cFocus, cRange, cAtt, cRel;
-    std::array<float, 8> cacheKey { -1, -1, -1, -1, -1, -1, -1, -1 };
+    std::array<float, 9> cacheKey { -1, -1, -1, -1, -1, -1, -1, -1, -1 };
     float tcAtt = -1, tcRel = -1, tcRate = -1;
+    std::vector<float> cContour, cLoud, boostWork;
+    float contourKey = 1.0e9f, makeupDb = 0.0f, inMs = 0.0f, outMs = 0.0f, brightIn = 0.0f, brightOut = 0.0f;
+    std::atomic<float> meterIn { -120.0f }, meterOut { -120.0f }, meterBright { 0.0f }, meterMakeup { 0.0f };
     std::vector<float> inBuf[2], scBuf[2], outAcc[2], outBuf[2], levelDb[2], redOwn[2], redSmooth[2];
     std::vector<cpx> spec[2];
     std::array<std::atomic<float>, displayPoints> dispLevel {}, dispRed {};

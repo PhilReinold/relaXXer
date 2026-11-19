@@ -32,14 +32,20 @@ RelaXXer findet harsche, schrille oder dröhnende Resonanzen automatisch und sen
 | Selektivität | wie wählerisch die Erkennung ist (hoch = nur markante Resonanzen) |
 | Soft / Hard | Soft: transparent, pegelunabhängig. Hard: kräftiger, reagiert stärker auf laute Stellen |
 | Attack / Release | Reaktionszeit (Referenz bei 1 kHz; Höhen reagieren schneller, Bässe langsamer) |
-| Normal / Hoch | Hoch = feinere Zeitauflösung (gut für Drums, Busse), etwas mehr CPU |
+| Normal / Hoch / Live | Hoch = feinere Zeitauflösung (Drums, Busse). Live = nur ~5 ms Latenz zum Einspielen/Monitoring, gröberes Frequenzraster |
 | L/R, M/S, Link, Balance | Stereo-Bearbeitung: gekoppelt (Link 100 %) oder getrennt; Balance verteilt die Wirkung |
+| Freilegen | hebt verdeckte, zu leise Bereiche behutsam an (max. +6 dB), wie „Recover" bei Gullfoss |
+| Hell/Dunkel | Erkennung bevorzugt Tiefen (+, Ergebnis heller) oder Höhen (−, dunkler), wie „Brighten" |
+| Kontur | Lautheitskontur: + = mehr Bass und Höhen, weniger Mitten (wie „Boost") |
+| Lautheit halten | gleicht die wahrgenommene Lautheit automatisch aus (fairer A/B-Vergleich) |
 | Mix / Trim | Trocken/Nass-Anteil, Pegelausgleich des Nassanteils |
 | Delta | nur das Entfernte hören |
 | Sidechain | externes Signal steuert die Erkennung (Logic: Plugin-Fenster oben rechts "Side Chain") |
 | Spektrum-Knoten | **L**/**H**: Arbeitsbereich, **1**/**2**: Empfindlichkeit (ziehen), Mausrad = Breite (Q), Doppelklick = zurücksetzen |
 
-13 Presets: Standard, Vocal (Härte, De-Esser, nasal), Akustik-/E-Gitarre, Bass, Overheads, Snare, Synth, Mix-Bus, Mastering, Sidechain.
+17 Presets: Standard, Vocal (Härte, De-Esser, nasal), Akustik-/E-Gitarre, Bass, Overheads, Snare, Synth, Mix-Bus (sanft, Klarheit), Mastering (hauchzart, Kontur), Vocal live, Sidechain.
+
+Oben im Spektrum: Absenkung, Pegel rein/raus, Helligkeits-Änderung und automatischer Ausgleich.
 
 ## Technik
 

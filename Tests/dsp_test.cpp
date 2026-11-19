@@ -173,7 +173,7 @@ int main()
         for (double rate : rates)
             for (int chs = 1; chs <= 2; ++chs)
             {
-                relaxxer::Processor r; r.prepare (rate, chs);
+                relaxxer::Processor r; r.prepare (rate, chs, chs == 2 && rate > 40000);
                 for (int it = 0; it < 8; ++it)
                 {
                     relaxxer::Params p;
@@ -183,6 +183,7 @@ int main()
                     p.delta = it == 5; p.useSidechain = it & 4; p.highQuality = it & 1;
                     p.lowCutHz = rnd (-100, 30000); p.highCutHz = rnd (-100, 30000);
                     p.band1Hz = rnd (-10, 50000); p.band1Db = rnd (-60, 60); p.band1Q = rnd (-1, 30);
+                    p.recover = rnd (-1, 3); p.brighten = rnd (-3, 3); p.contourDb = rnd (-30, 30); p.autoGain = it & 2;
                     if (it == 7) { p.depth = std::numeric_limits<float>::quiet_NaN(); p.mix = std::numeric_limits<float>::infinity(); }
                     const int n = 3000 + (int) (u (g) * 4000);
                     Buf a (n), b (n), sc (n);
@@ -202,6 +203,86 @@ int main()
             }
         std::printf ("9) Fuzz: alles endlich = %d, max |Ausgang| = %.2f (Sicherung %.1f)\n", (int) finiteAll, maxAbs, relaxxer::Processor::safetyClamp);
         ok &= finiteAll && maxAbs <= relaxxer::Processor::safetyClamp + 1e-4f;
+    }
+
+
+    // 11) Live-Modus: ~5 ms Latenz und trotzdem transparent
+    {
+        relaxxer::Processor r; r.prepare (sr, 2, true);
+        relaxxer::Params p; p.depth = 0.0f;
+        Buf in = noise (N, -20, 21), l = in, rr = in;
+        run (r, l, &rr, p);
+        const int L = r.getLatencySamples(); double err = 0, ref = 0;
+        for (size_t i = 4096; i < N; ++i) { const double d = l[i] - in[i - (size_t) L]; err += d * d; ref += (double) in[i - (size_t) L] * in[i - (size_t) L]; }
+        const double e = 10 * std::log10 (err / ref + 1e-30);
+        relaxxer::Processor r2; r2.prepare (sr, 1, true);
+        relaxxer::Params p2; p2.depth = 8.0f;
+        Buf in2 = noise (N, -30, 22); addSine (in2, 3000.0f, -12.0f, sr);
+        Buf o2 = in2; run (r2, o2, nullptr, p2);
+        const float red = toneDb (in2, N / 2 - L, N - L, 3000.0f, sr) - toneDb (o2, N / 2, N, 3000.0f, sr);
+        std::printf ("11) Live: Latenz %d Samples = %.1f ms, Transparenz %.1f dB, Resonanz 3 kHz -%.1f dB\n", L, 1000.0 * L / sr, e, red);
+        ok &= L <= 300 && e < -90.0 && red > 4.0f;
+    }
+
+    // 12) Freilegen (Recover): ein Loch im Spektrum (verdeckter Bereich) wird angehoben
+    {
+        float lift[2];
+        for (int i = 0; i < 2; ++i)
+        {
+            relaxxer::Processor r; r.prepare (sr, 1);
+            relaxxer::Params p; p.depth = 0.0f; p.recover = i ? 1.0f : 0.0f;
+            // dichter Multiton (Rauschen-ähnlich) mit einem Loch von 1,6 bis 2,5 kHz
+            Buf in (N, 0.0f);
+            std::mt19937 gg (23); std::uniform_real_distribution<float> ph (0.0f, 6.2831853f);
+            for (double f = 101.3; f < 10000.0; f += 37.7)
+            {
+                if (f > 1600.0 && f < 2500.0) continue;
+                const float phase = ph (gg), amp = 0.0015f;
+                const double w = 2 * PI * f / sr;
+                for (size_t k = 0; k < N; ++k) in[k] += amp * (float) std::sin (w * (double) k + phase);
+            }
+            addSine (in, 2010.0f, -62.0f, sr); // leiser Rest im Loch (der "verdeckte" Anteil)
+            Buf out = in; run (r, out, nullptr, p);
+            lift[i] = toneDb (out, N / 2, N, 2010.0f, sr) - toneDb (in, N / 2 - lat, N - lat, 2010.0f, sr);
+            if (i == 0) std::printf ("    (Loch-Tiefe: %.1f dB unter 1 kHz)\n", toneDb (in, N / 2, N, 1006.4f, sr) - toneDb (in, N / 2, N, 2010.0f, sr));
+        }
+        std::printf ("12) Freilegen: Loch bei 2 kHz %+.1f dB (aus) vs %+.1f dB (an)\n", lift[0], lift[1]);
+        ok &= std::fabs (lift[0]) < 0.5f && lift[1] > 1.0f && lift[1] <= 6.5f;
+    }
+
+    // 13) Lautheit halten: nach starker Absenkung bleibt der gewichtete Pegel fast gleich
+    {
+        float diff[2];
+        for (int i = 0; i < 2; ++i)
+        {
+            relaxxer::Processor r; r.prepare (sr, 1);
+            relaxxer::Params p; p.depth = 14.0f; p.selectivity = 1.0f; p.autoGain = i == 1;
+            Buf in = noise (N, -30, 24); addSine (in, 2500.0f, -16.0f, sr); addSine (in, 5000.0f, -18.0f, sr);
+            Buf out = in; run (r, out, nullptr, p);
+            diff[i] = r.getOutputDb() - r.getInputDb();
+        }
+        std::printf ("13) Lautheit halten: Pegeländerung aus %+.1f dB, an %+.1f dB\n", diff[0], diff[1]);
+        ok &= diff[0] < -1.0f && std::fabs (diff[1]) < 0.7f;
+    }
+
+    // 14) Kontur + Hell/Dunkel: Kontur hebt Bass relativ zu Mitten; Brighten macht das Ergebnis heller
+    {
+        relaxxer::Processor r; r.prepare (sr, 1);
+        relaxxer::Params p; p.depth = 0.0f; p.contourDb = 6.0f;
+        Buf in = noise (N, -30, 25); Buf out = in; run (r, out, nullptr, p);
+        const float bass = toneDb (out, N / 2, N, 60.0f, sr) - toneDb (in, N / 2 - lat, N - lat, 60.0f, sr);
+        const float mid  = toneDb (out, N / 2, N, 1500.0f, sr) - toneDb (in, N / 2 - lat, N - lat, 1500.0f, sr);
+        float bright[2];
+        for (int i = 0; i < 2; ++i)
+        {
+            relaxxer::Processor q; q.prepare (sr, 1);
+            relaxxer::Params pp; pp.depth = 10.0f; pp.selectivity = 0.5f; pp.brighten = i ? 1.0f : -1.0f;
+            Buf x = noise (N, -30, 26); addSine (x, 200.0f, -20.0f, sr); addSine (x, 6000.0f, -20.0f, sr);
+            Buf y = x; run (q, y, nullptr, pp);
+            bright[i] = q.getBrightnessDeltaDb();
+        }
+        std::printf ("14) Kontur +6: Bass %+.1f dB, Mitten %+.1f dB | Hell/Dunkel -100%%: %+.2f dB, +100%%: %+.2f dB Helligkeit\n", bass, mid, bright[0], bright[1]);
+        ok &= bass > mid + 3.0f && bright[1] > bright[0] + 0.5f;
     }
 
     // 10) Rechenlast
