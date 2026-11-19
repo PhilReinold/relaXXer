@@ -790,6 +790,11 @@ void RelaxxerEditor::paint (juce::Graphics& g)
         g.fillRect (a);
         g.restoreState();
 
+        // Wasserzeichen der Marke, mittig im Balken
+        g.setColour (juce::Colours::white.withAlpha (0.38f));
+        g.setFont (soy::Fonts::display (24.0f));
+        g.drawText ("Boy made of Soy", a.withSizeKeepingCentre (300.0f, a.getHeight()).translated (0.0f, 1.0f), juce::Justification::centred);
+
         auto plate = juce::Rectangle<float> (a.getX() + 12, a.getY() + 10, 170, a.getHeight() - 20);
         g.setColour (C::panel.withAlpha (0.92f));
         g.fillRoundedRectangle (plate, plate.getHeight() * 0.5f);
