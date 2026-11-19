@@ -104,13 +104,38 @@ const Preset presets[] =
     { "Sidechain – Platz für Gesang",   6.0f, 3.0f, 2.0f,  5.0f, 100.0f, 0, 1, 100, 100,  200,  8000, 1500,  3.0f, 0.7f,  3500,  2.0f, 0.8f },
 };
 constexpr int numPresets = (int) (sizeof (presets) / sizeof (presets[0]));
+
+// Sortierung im Menü: erst alles ohne "Bus" im Namen, dann alle Bus-Presets (Reihenfolge sonst wie oben)
+const std::vector<int>& presetOrder()
+{
+    static const std::vector<int> order = []
+    {
+        std::vector<int> o;
+        for (int pass = 0; pass < 2; ++pass)
+            for (int i = 0; i < numPresets; ++i)
+                if (juce::String (juce::CharPointer_UTF8 (presets[i].name)).contains ("Bus") == (pass == 1))
+                    o.push_back (i);
+        return o;
+    }();
+    return order;
+}
+}
+
+bool RelaxxerProcessor::isBusPreset (int i)
+{
+    return juce::isPositiveAndBelow (i, numPresets)
+        && juce::String (juce::CharPointer_UTF8 (presets[presetOrder()[(size_t) i]].name)).contains ("Bus");
+}
+
+namespace
+{
 }
 
 int RelaxxerProcessor::getNumPrograms() { return numPresets; }
 
 const juce::String RelaxxerProcessor::getProgramName (int i)
 {
-    return juce::isPositiveAndBelow (i, numPresets) ? juce::String (juce::CharPointer_UTF8 (presets[i].name)) : juce::String();
+    return juce::isPositiveAndBelow (i, numPresets) ? juce::String (juce::CharPointer_UTF8 (presets[presetOrder()[(size_t) i]].name)) : juce::String();
 }
 
 void RelaxxerProcessor::setCurrentProgram (int i)
@@ -119,7 +144,7 @@ void RelaxxerProcessor::setCurrentProgram (int i)
     currentProgram = i;
     apvts.state.setProperty ("preset", i, nullptr);
 
-    const auto& p = presets[i];
+    const auto& p = presets[presetOrder()[(size_t) i]];
     auto set = [this] (const char* id, float v)
     {
         if (auto* prm = apvts.getParameter (id))

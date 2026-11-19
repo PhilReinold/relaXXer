@@ -660,8 +660,13 @@ RelaxxerEditor::RelaxxerEditor (RelaxxerProcessor& p)
     scAtt    = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (p.apvts, "sidechain", sidechain);
     agAtt    = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (p.apvts, "autogain", autoGain);
 
+    presetBox.addSectionHeading (u8 ("Einzelspuren & Kreativ"));
+    bool busHeading = false;
     for (int i = 0; i < proc.getNumPrograms(); ++i)
+    {
+        if (! busHeading && RelaxxerProcessor::isBusPreset (i)) { presetBox.addSectionHeading ("Busse"); busHeading = true; }
         presetBox.addItem (proc.getProgramName (i), i + 1);
+    }
     presetBox.setSelectedId (proc.getCurrentProgram() + 1, juce::dontSendNotification);
     presetBox.onChange = [this] { proc.setCurrentProgram (presetBox.getSelectedId() - 1); };
     prevButton.onClick = [this] { stepPreset (-1); };

@@ -25,6 +25,7 @@ public:
     int getCurrentProgram() override { return currentProgram; }
     void setCurrentProgram (int) override;
     const juce::String getProgramName (int) override;
+    static bool isBusPreset (int index);
     void changeProgramName (int, const juce::String&) override {}
 
     void getStateInformation (juce::MemoryBlock&) override;
