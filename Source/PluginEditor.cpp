@@ -61,6 +61,39 @@ juce::Typeface::Ptr soy::LookAndFeel::getTypefaceForFont (const juce::Font& f)
     return LookAndFeel_V4::getTypefaceForFont (f);
 }
 
+juce::Rectangle<int> soy::LookAndFeel::getTooltipBounds (const juce::String& text, juce::Point<int> pos, juce::Rectangle<int> parent)
+{
+    juce::AttributedString a;
+    a.append (text, Fonts::body (14.0f), C::ink);
+    a.setWordWrap (juce::AttributedString::byWord);
+    juce::TextLayout tl;
+    tl.createLayout (a, 300.0f);
+    const int w = (int) std::ceil (tl.getWidth()) + 28, h = (int) std::ceil (tl.getHeight()) + 20;
+    auto r = juce::Rectangle<int> (pos.x + 14, pos.y + 18, w, h);
+    if (r.getRight() > parent.getRight()) r.setX (pos.x - w - 8);
+    if (r.getBottom() > parent.getBottom()) r.setY (pos.y - h - 8);
+    return r.constrainedWithin (parent);
+}
+
+void soy::LookAndFeel::drawTooltip (juce::Graphics& g, const juce::String& text, int w, int h)
+{
+    auto r = juce::Rectangle<float> (0, 0, (float) w, (float) h);
+    g.setColour (C::panel);
+    g.fillRoundedRectangle (r, 12.0f);
+    g.setColour (C::line);
+    g.drawRoundedRectangle (r.reduced (0.5f), 12.0f, 1.0f);
+    // kleiner Marken-Streifen links
+    g.setGradientFill (brandGradient (r));
+    g.fillRoundedRectangle (r.withWidth (4.0f).reduced (0.0f, 10.0f).translated (6.0f, 0.0f), 2.0f);
+
+    juce::AttributedString a;
+    a.append (text, Fonts::body (14.0f), C::ink);
+    a.setWordWrap (juce::AttributedString::byWord);
+    juce::TextLayout tl;
+    tl.createLayout (a, (float) w - 28.0f);
+    tl.draw (g, r.reduced (16.0f, 10.0f).withTrimmedLeft (2.0f));
+}
+
 void soy::LookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int w, int h, float pos,
                                          float startAngle, float endAngle, juce::Slider& s)
 {
@@ -228,6 +261,11 @@ SoySegment::SoySegment (juce::AudioProcessorValueTreeState& s, const juce::Strin
         });
         attachment->sendInitialUpdate();
     }
+}
+
+void SoySegment::setHelp (const juce::StringArray& t)
+{
+    for (int i = 0; i < buttons.size() && i < t.size(); ++i) buttons[i]->setTooltip (t[i]);
 }
 
 void SoySegment::resized()
@@ -479,6 +517,22 @@ void SpectrumView::paint (juce::Graphics& g)
     }
 }
 
+juce::String SpectrumView::getTooltip()
+{
+    if (drag >= 0) return {};
+    switch (hover)
+    {
+        case 0:  return u8 ("Low Cut: Unterhalb dieser Frequenz greift RelaXXer nicht ein. Seitlich ziehen.");
+        case 3:  return u8 ("High Cut: Oberhalb dieser Frequenz greift RelaXXer nicht ein. Seitlich ziehen.");
+        case 1:
+        case 2:  return u8 ("Fokus-Band: Nach oben ziehen = hier empfindlicher (mehr Absenkung), nach unten = unempfindlicher. "
+                            "Seitlich = Frequenz, Mausrad = Breite, Doppelklick = zurücksetzen.");
+        default: break;
+    }
+    return u8 ("Spektrum: blau = dein Signal, Verlauf von oben = was RelaXXer gerade absenkt, violett von unten = was „Freilegen“ anhebt. "
+               "Die dunkle Linie zeigt, wo die Erkennung empfindlicher oder unempfindlicher ist.");
+}
+
 void SpectrumView::mouseMove (const juce::MouseEvent& e)
 {
     const int h = nodeAt (e.position);
@@ -577,10 +631,34 @@ RelaxxerEditor::RelaxxerEditor (RelaxxerProcessor& p)
         b->setClickingTogglesState (true);
         b->getProperties().set ("chip", true);
     }
+    // Erklärungen beim Verweilen mit der Maus
+    depth.setHelp       (u8 ("Tiefe: wie stark Resonanzen abgesenkt werden. Hochdrehen, bis es zu viel klingt, dann ein Stück zurück."));
+    sharpness.setHelp   (u8 ("Schärfe: niedrig = breite, sanfte Absenkungen (allgemeine Härte). Hoch = schmale, tiefe Kerben (Klingeln, Pfeifen)."));
+    selectivity.setHelp (u8 ("Selektivität: hoch = nur die markantesten Resonanzen werden behandelt. Niedrig = fast alles, was hervorsticht."));
+    recover.setHelp     (u8 ("Freilegen: hebt Bereiche behutsam an, die zu leise sind oder verdeckt werden (max. +6 dB). Macht den Klang klarer."));
+    brighten.setHelp    (u8 ("Hell/Dunkel: nach rechts = Tiefen werden eher abgesenkt, das Ergebnis klingt heller. Nach links = Höhen eher, es klingt dunkler."));
+    contour.setHelp     (u8 ("Kontur: nach rechts = mehr Bass und Höhen, weniger Mitten (klingt wie lauter gehört). Nach links = mittiger."));
+    attack.setHelp      (u8 ("Attack: wie schnell RelaXXer zupackt. Langsamer lässt Anschläge und Transienten durch. Höhen reagieren immer etwas schneller."));
+    release.setHelp     (u8 ("Release: wie schnell die Absenkung wieder verschwindet. Länger klingt ruhiger und natürlicher."));
+    link.setHelp        (u8 ("Link: 100 % = beide Kanäle werden gleich bearbeitet. Weniger = jeder Kanal für sich (in M/S oft breiter)."));
+    balance.setHelp     (u8 ("Balance: verteilt die Wirkung zwischen links/rechts bzw. Mitte/Seite."));
+    mix.setHelp         (u8 ("Mix: Anteil des bearbeiteten Signals. Unter 100 % mischt du das Original dazu."));
+    trim.setHelp        (u8 ("Trim: Pegel des bearbeiteten Signals, z. B. für einen fairen Vergleich mit Bypass."));
+    mode.setHelp ({ u8 ("Soft: transparent und unabhängig vom Pegel. Der beste Start für fast alles."),
+                    u8 ("Hard: packt kräftiger zu und reagiert stärker auf laute Stellen. Für hartnäckige Resonanzen.") });
+    quality.setHelp ({ u8 ("Normal: gute Balance aus Klang und CPU, ~21 ms Latenz."),
+                       u8 ("Hoch: feinere Zeitauflösung, gut für Drums und Busse. Etwas mehr CPU."),
+                       u8 ("Live: nur ~5 ms Latenz zum Einspielen und Monitoring. Gröberes Frequenzraster.") });
+    stereo.setHelp ({ u8 ("L/R: links und rechts als Kanäle bearbeiten."),
+                      u8 ("M/S: Mitte und Seite getrennt bearbeiten, z. B. nur harsche Seitensignale beruhigen.") });
+    delta.setTooltip     (u8 ("Delta: du hörst nur, was RelaXXer entfernt. Ideal, um die Knoten im Spektrum gezielt zu setzen."));
+    sidechain.setTooltip (u8 ("Sidechain: ein anderes Signal steuert die Erkennung. In Logic oben rechts im Plugin-Fenster unter „Side Chain“ wählen."));
+    autoGain.setTooltip  (u8 ("Lautheit halten: gleicht die Lautstärke automatisch aus, damit du fair vergleichst und nicht „lauter = besser“ hörst."));
+    presetBox.setTooltip (u8 ("Presets: Startpunkte für typische Aufgaben. Danach die Tiefe nach Gehör einstellen."));
+
     deltaAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (p.apvts, "delta", delta);
     scAtt    = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (p.apvts, "sidechain", sidechain);
     agAtt    = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (p.apvts, "autogain", autoGain);
-    delta.setTooltip (u8 ("Nur das hören, was RelaXXer entfernt"));
 
     for (int i = 0; i < proc.getNumPrograms(); ++i)
         presetBox.addItem (proc.getProgramName (i), i + 1);

@@ -48,17 +48,20 @@ public:
     juce::Font getPopupMenuFont() override { return Fonts::body (15.0f); }
     void drawPopupMenuBackground (juce::Graphics&, int w, int h) override;
     juce::Typeface::Ptr getTypefaceForFont (const juce::Font&) override;
+    juce::Rectangle<int> getTooltipBounds (const juce::String&, juce::Point<int>, juce::Rectangle<int>) override;
+    void drawTooltip (juce::Graphics&, const juce::String&, int w, int h) override;
 };
 } // namespace soy
 
 // Bogen-Regler mit Titel oben und Wert (DM Mono) unten
-class SoyKnob : public juce::Component
+class SoyKnob : public juce::Component, public juce::SettableTooltipClient
 {
 public:
     SoyKnob (juce::AudioProcessorValueTreeState&, const juce::String& paramID, const juce::String& title, bool bipolar = false);
     void paint (juce::Graphics&) override;
     void resized() override;
     juce::Slider slider;
+    void setHelp (const juce::String& t) { setTooltip (t); slider.setTooltip (t); }
 
 private:
     juce::String title;
@@ -71,6 +74,7 @@ class SoySegment : public juce::Component
 public:
     SoySegment (juce::AudioProcessorValueTreeState&, const juce::String& paramID, juce::StringArray labels);
     void resized() override;
+    void setHelp (const juce::StringArray& perButton);
 
 private:
     juce::OwnedArray<juce::TextButton> buttons;
@@ -78,7 +82,7 @@ private:
 };
 
 // Spektrum, Absenkung und Fokus-Kurve mit ziehbaren Knoten
-class SpectrumView : public juce::Component
+class SpectrumView : public juce::Component, public juce::TooltipClient
 {
 public:
     explicit SpectrumView (RelaxxerProcessor&);
@@ -91,6 +95,7 @@ public:
     void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
     void mouseExit (const juce::MouseEvent&) override { hover = -1; repaint(); }
     void refresh();
+    juce::String getTooltip() override;
 
 private:
     struct Node { const char* freqID; const char* sensID; const char* qID; juce::String name; juce::Colour colour; };
@@ -134,6 +139,7 @@ private:
 
     juce::ComboBox presetBox;
     juce::TextButton prevButton { "<" }, nextButton { ">" };
+    juce::TooltipWindow tooltips { this, 650 }; // Erklärung nach ~0,65 s Verweilen
 
     juce::Image grain;
     juce::Rectangle<int> appbar, panelCore, panelTone, panelTime, panelStereo, panelOut;

@@ -20,6 +20,8 @@ RelaXXer findet harsche, schrille oder dröhnende Resonanzen automatisch und sen
 
 ## So arbeitest du damit
 
+Tipp: Bleib mit der Maus kurz über einem Regler, Schalter oder Knoten stehen, dann erscheint eine kurze Erklärung.
+
 1. Preset wählen (z. B. „Vocal – Härte weg").
 2. **Tiefe** hochdrehen, bis es zu viel wird, dann ein Stück zurück.
 3. **Delta** an: du hörst nur, was entfernt wird. Mit den Knoten **1** und **2** im Spektrum die Problemzone empfindlicher (hoch ziehen) oder unempfindlicher (runter) machen. Delta wieder aus.
