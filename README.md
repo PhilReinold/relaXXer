@@ -45,7 +45,7 @@ Tipp: Bleib mit der Maus kurz über einem Regler, Schalter oder Knoten stehen, d
 | Sidechain | externes Signal steuert die Erkennung (Logic: Plugin-Fenster oben rechts "Side Chain") |
 | Spektrum-Knoten | **L**/**H**: Arbeitsbereich, **1**/**2**: Empfindlichkeit (ziehen), Mausrad = Breite (Q), Doppelklick = zurücksetzen |
 
-17 Presets: Standard, Vocal (Härte, De-Esser, nasal), Akustik-/E-Gitarre, Bass, Overheads, Snare, Synth, Mix-Bus (sanft, Klarheit), Mastering (hauchzart, Kontur), Vocal live, Sidechain.
+26 Presets: Standard, Vocal (Härte, De-Esser, nasal), Akustik-/E-Gitarre, Bass, Overheads, Snare, Synth, Mix-Bus (sanft, Klarheit), Mastering (hauchzart, Kontur), Vocal live, Sidechain, Busse (Drums, Akustik- und E-Gitarren, Background-Vocals, Vocals) und fünf extreme Kreativ-Presets (Geisterstimme, Flüstermaschine, Spektral-Zerstörer, Live-Roboter, Stereo-Nebel).
 
 Oben im Spektrum: Absenkung, Pegel rein/raus, Helligkeits-Änderung und automatischer Ausgleich.
 

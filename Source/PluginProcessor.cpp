@@ -67,6 +67,7 @@ struct Preset
     float depth, sharp, sel, att, rel; int mode; int stereo; float link, mix;
     float lc, hc, b1f, b1s, b1q, b2f, b2s, b2q;
     float recover = 0.0f, brighten = 0.0f, contour = 0.0f; bool autogain = false;
+    bool delta = false; int quality = 0; float balance = 0.0f;
 };
 
 // Startpunkte – danach Tiefe nach Gehör einstellen (hochdrehen bis es zu viel ist, dann etwas zurück)
@@ -88,6 +89,18 @@ const Preset presets[] =
     { "Mastering – hauchzart",           1.5f, 2.5f, 5.0f, 15.0f, 200.0f, 0, 1, 100,  70,   30, 20000,  250,  0.0f, 1.0f,  4000,  0.0f, 1.0f, 10.0f, 0.0f, 0.0f, true },
     { "Mastering – leise hören (Kontur)", 1.5f, 2.5f, 5.0f, 15.0f, 200.0f, 0, 1, 100, 100,   30, 20000,  250,  0.0f, 1.0f,  4000,  0.0f, 1.0f, 10.0f, 0.0f, 3.0f, true },
     { "Vocal – live (geringe Latenz)",   5.0f, 4.5f, 4.0f,  3.0f,  60.0f, 0, 0, 100, 100,  150, 16000, 2500,  3.0f, 1.0f,  5000,  2.0f, 0.8f },
+    // ---- Busse ----
+    { "Drum-Bus – Härte raus, Punch bleibt", 4.0f, 5.0f, 4.5f,  6.0f,  60.0f, 0, 1, 100,  85,   60, 18000,  400,  2.0f, 1.0f,  4500,  2.0f, 0.8f,  0.0f, 0.0f, 0.0f, true, false, 1 },
+    { "Gitarren-Bus – Akustik",            4.0f, 4.0f, 4.0f,  8.0f, 100.0f, 0, 1, 100,  90,  100, 15000,  250,  2.0f, 1.0f,  3500,  2.0f, 1.0f, 10.0f, 0.0f, 0.0f, true },
+    { "Gitarren-Bus – E-Gitarren",         4.5f, 6.0f, 5.0f,  5.0f,  80.0f, 0, 1, 100, 100,  120, 12000,  200,  3.0f, 1.0f,  3000,  3.0f, 0.8f,  0.0f, 0.0f, 0.0f, true },
+    { "Background-Vocals-Bus",             6.0f, 4.0f, 3.5f,  4.0f,  80.0f, 0, 1,  80, 100,  150, 16000, 3000,  3.0f, 1.0f,  7000,  3.0f, 1.0f,  0.0f, -10.0f, 0.0f, true },
+    { "Vocal-Bus – zusammenführen",        4.5f, 4.5f, 4.0f,  4.0f,  80.0f, 0, 1, 100, 100,  120, 16000, 2800,  2.0f, 1.0f,  6500,  2.0f, 1.0f, 20.0f, 0.0f, 0.0f, true },
+    // ---- Kreativ / extrem (zum Ausprobieren, greifen massiv ein) ----
+    { "Kreativ – Geisterstimme (nur Resonanzen)", 18.0f, 8.0f, 2.0f, 2.0f,  80.0f, 0, 0, 100, 100,   80, 18000, 1000,  0.0f, 1.0f,  4000,  0.0f, 1.0f,  0.0f, 0.0f, 0.0f, false, true },
+    { "Kreativ – Flüstermaschine",         20.0f, 2.0f, 0.0f,  1.0f,  20.0f, 0, 0, 100, 100,   60, 20000,  500,  6.0f, 0.5f,  3000,  6.0f, 0.5f,  0.0f, 0.0f, 0.0f, true },
+    { "Kreativ – Spektral-Zerstörer",      20.0f, 10.0f, 0.0f, 0.5f,   5.0f, 1, 0, 100, 100,   20, 20000,  300,  0.0f, 1.0f,  3000,  0.0f, 1.0f,  0.0f, 0.0f, 0.0f, true },
+    { "Kreativ – Live-Roboter",            16.0f, 9.0f, 1.0f,  0.5f,  10.0f, 1, 0, 100, 100,   80, 16000, 1000,  4.0f, 0.6f,  2500,  0.0f, 1.0f,  0.0f, 0.0f, 0.0f, true, false, 2 },
+    { "Kreativ – Stereo-Nebel",            15.0f, 3.0f, 1.0f,  5.0f, 400.0f, 0, 1,   0, 100,   80, 20000,  800,  0.0f, 1.0f,  5000,  4.0f, 0.7f,  0.0f, 0.0f, 0.0f, true, false, 0, 100.0f },
     { "Sidechain – Platz für Gesang",   6.0f, 3.0f, 2.0f,  5.0f, 100.0f, 0, 1, 100, 100,  200,  8000, 1500,  3.0f, 0.7f,  3500,  2.0f, 0.8f },
 };
 constexpr int numPresets = (int) (sizeof (presets) / sizeof (presets[0]));
@@ -118,10 +131,10 @@ void RelaxxerProcessor::setCurrentProgram (int i)
     };
     set ("depth", p.depth); set ("sharpness", p.sharp); set ("selectivity", p.sel);
     set ("attack", p.att);  set ("release", p.rel);
-    set ("mode", (float) p.mode); set ("stereo", (float) p.stereo); set ("link", p.link); set ("balance", 0.0f);
-    set ("mix", p.mix); set ("trim", 0.0f); set ("delta", 0.0f);
+    set ("mode", (float) p.mode); set ("stereo", (float) p.stereo); set ("link", p.link); set ("balance", p.balance);
+    set ("mix", p.mix); set ("trim", 0.0f); set ("delta", p.delta ? 1.0f : 0.0f);
     set ("sidechain", juce::String (juce::CharPointer_UTF8 (p.name)).startsWith ("Sidechain") ? 1.0f : 0.0f);
-    set ("quality", juce::String (juce::CharPointer_UTF8 (p.name)).contains ("live") ? 2.0f : 0.0f);
+    set ("quality", juce::String (juce::CharPointer_UTF8 (p.name)).contains ("live") ? 2.0f : (float) p.quality);
     set ("lowcut", p.lc); set ("highcut", p.hc);
     set ("b1freq", p.b1f); set ("b1sens", p.b1s); set ("b1q", p.b1q);
     set ("b2freq", p.b2f); set ("b2sens", p.b2s); set ("b2q", p.b2q);
